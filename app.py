@@ -5,16 +5,17 @@ Serves the roster, randomizes groups, collects survey responses, and
 """
 
 import csv
-import json
 import os
 import random
 from datetime import datetime, timezone
 
+import psycopg2
 from flask import Flask, jsonify, request, send_from_directory
 
 DIST_DIR = os.path.join(os.path.dirname(__file__), "frontend", "dist")
-DATA_FILE = os.path.join(os.path.dirname(__file__), "data", "roster.json")
+ENV_FILE = os.path.join(os.path.dirname(__file__), ".env")
 SURVEY_FILE = os.path.join(os.path.dirname(__file__), "data", "survey_responses.csv")
+COURSE = "TECH-UB 24 — Projects in Programming & Data Science, Fall 2026"
 
 # CSV columns: name (from roster dropdown) then schema fields in PRD order.
 SURVEY_COLUMNS = ["name", "school_year", "working_style"]
@@ -23,9 +24,51 @@ SCHOOL_YEARS = ["First-year", "Sophomore", "Junior", "Senior", "Other"]
 app = Flask(__name__, static_folder=None)
 
 
+def load_env():
+    if not os.path.isfile(ENV_FILE):
+        return
+    with open(ENV_FILE, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+load_env()
+
+
+def db_connect():
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is not set")
+    kwargs = {}
+    if "railway.internal" not in database_url:
+        kwargs["sslmode"] = "require"
+    return psycopg2.connect(database_url, **kwargs)
+
+
 def load_roster():
-    with open(DATA_FILE, encoding="utf-8") as f:
-        return json.load(f)
+    conn = db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT name, school_year
+                FROM students
+                ORDER BY name
+                """
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    students = [
+        {"id": i, "name": name, "school_year": school_year}
+        for i, (name, school_year) in enumerate(rows, start=1)
+    ]
+    return {"course": COURSE, "students": students}
 
 
 @app.get("/api/roster")
